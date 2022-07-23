@@ -17,4 +17,4 @@ FROM scratch
 
 COPY --from=builder /build/ /
 
-ENTRYPOINT ["/controller"]
+ENTRYPOINT ["/bin/controller"]
