@@ -16,9 +16,15 @@ jobs:
     - uses: actions/checkout@v3
     - name: Docker login
       run: docker login --username ${{ secrets.DOCKER_LOGIN }} --password ${{ secrets.DOCKER_PASSWORD }}
+    - name: Build latest image
+      run: docker build . --file Dockerfile --tag jgaskins/redis-cluster-operator:latest
+      if: ${{ github.ref_name == 'main' }}
+    - name: Push latest image
+      run: docker push jgaskins/redis-cluster-operator:latest
+      if: ${{ github.ref_name == 'main' }}
     - name: Build branch image
       run: docker build . --file Dockerfile --tag jgaskins/redis-cluster-operator:${{ github.head_ref }}
-      if: ${{ github.ref_type == 'branch' || github.ref_type == 'tag' }}
+      if: ${{ (github.ref_type == 'branch' || github.ref_type == 'tag') && github.ref_name != 'main' }}
     - name: Push branch image
       run: docker push jgaskins/redis-cluster-operator:${{ github.head_ref }}
-      if: ${{ github.ref_type == 'branch' || github.ref_type == 'tag' }}
+      if: ${{ (github.ref_type == 'branch' || github.ref_type == 'tag') && github.ref_name != 'main' }}
