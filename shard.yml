@@ -1,0 +1,17 @@
+name: redis_cluster_operator
+version: 0.1.0
+
+authors:
+  - Jamie Gaskins <jgaskins@hey.com>
+
+targets:
+  controller:
+    main: src/redis_cluster_operator.cr
+
+dependencies:
+  kubernetes: { github: jgaskins/kubernetes }
+  redis: { github: jgaskins/redis }
+
+crystal: 1.4.1
+
+license: MIT

@@ -1,0 +1,22 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: redis-cluster-operator
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-cluster-controller
+  namespace: redis-cluster-operator
+spec:
+  selector:
+    matchLabels: &labels
+      app: redis-cluster-operator
+  template:
+    metadata:
+      labels: *labels
+    spec:
+      containers:
+        - name: controller
+          image: jgaskins/redis-cluster-operator
