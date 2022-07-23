@@ -15,6 +15,6 @@ RUN shards build controller --production --static # --release
 
 FROM scratch
 
-COPY --from=builder /build/bin/controller /
+COPY --from=builder /build/ /
 
 ENTRYPOINT ["/controller"]
