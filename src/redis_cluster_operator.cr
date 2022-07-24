@@ -216,6 +216,7 @@ def apply(k8s, resource : Kubernetes::Resource(RedisDB))
       },
     },
     spec: {
+      restartPolicy: "OnFailure",
       containers: [
         {
           name:  "redis",
