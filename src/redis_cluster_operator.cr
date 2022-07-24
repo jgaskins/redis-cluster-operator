@@ -220,7 +220,7 @@ def apply(k8s, resource : Kubernetes::Resource(RedisDB))
     },
     spec: {
       restartPolicy: "Never",
-      containers: [
+      containers:    [
         {
           name:  "redis",
           image: "redis/redis-stack-server",
@@ -232,11 +232,9 @@ def apply(k8s, resource : Kubernetes::Resource(RedisDB))
           },
           ports:         { {containerPort: 6379} },
           livenessProbe: {
-            exec: {
-              command:             %w[redis-cli get foo],
-              initialDelaySeconds: 5,
-              periodSeconds:       3,
-            },
+            exec:                {command: %w[redis-cli get foo]},
+            initialDelaySeconds: 5,
+            periodSeconds:       3,
           },
         },
       ],
