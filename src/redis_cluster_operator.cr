@@ -67,41 +67,38 @@ loop do
   sleep 5.seconds
 
   k8s.redisclusters(namespace: nil).each do |cluster|
-    namespace = cluster.metadata.namespace
-    name = cluster.metadata.name
-    k8s.redisdbs(namespace: namespace, label_selector: "redis-cluster=#{name},redis-cluster-role=master").each do |redis|
-      if pod = k8s.pod(namespace: namespace, name: redis.metadata.name)
-        pp master: pod.status["podIP"]
-      else
-        LOG.warn { "No master pod for #{namespace}/#{name}. Failing over..." }
-        if new_master = k8s.redisdbs(namespace: namespace, label_selector: "redis-cluster=#{name},redis-cluster-role=replica").first?
-          new_master_name = new_master.metadata.name
-          LOG.warn { "Failing over to #{namespace}/#{new_master_name}..." }
-          if new_master_pod = k8s.pod(namespace: namespace, name: new_master_name)
-            uri = URI.parse("redis://#{new_master_pod.status["podIP"]}/")
-            LOG.warn { "Connecting to #{namespace}/#{new_master_pod.metadata.name} (#{uri})..." }
-            r = Redis::Client.new(uri)
-            LOG.warn { r.run(%w[replicaof no one]).inspect }
-            r.close
-            LOG.warn { "RedisDB #{namespace}/#{new_master_name} server has taken over as cluster master" }
-          end
+    reconcile_step k8s, cluster
+    # namespace = cluster.metadata.namespace
+    # name = cluster.metadata.name
+    # k8s.redisdbs(namespace: namespace, label_selector: "redis-cluster=#{name},redis-cluster-role=master").each do |redis|
+    #   if pod = k8s.pod(namespace: namespace, name: redis.metadata.name)
+    #     pp master: pod.status["podIP"]
+    #   else
+    #     LOG.warn { "No master pod for #{namespace}/#{name}. Failing over..." }
+    #     if new_master = k8s.redisdbs(namespace: namespace, label_selector: "redis-cluster=#{name},redis-cluster-role=replica").first?
+    #       new_master_name = new_master.metadata.name
+    #       LOG.warn { "Failing over to #{namespace}/#{new_master_name}..." }
+    #       if new_master_pod = k8s.pod(namespace: namespace, name: new_master_name)
+    #         uri = URI.parse("redis://#{new_master_pod.status["podIP"]}/")
+    #         LOG.warn { "Connecting to #{namespace}/#{new_master_pod.metadata.name} (#{uri})..." }
+    #         r = Redis::Client.new(uri)
+    #         LOG.warn { r.run(%w[replicaof no one]).inspect }
+    #         r.close
+    #         LOG.warn { "RedisDB #{namespace}/#{new_master_name} server has taken over as cluster master" }
+    #       end
 
-          LOG.warn { "Patching RedisDB #{namespace}/#{new_master_name} to become the master instance..." }
-          k8s.patch_redisdb(
-            namespace: namespace,
-            name: new_master_name,
-            metadata: {
-              annotations: {"redis-replicaof": "NO ONE"},
-              labels:      {"redis-cluster-role": "master"},
-            }
-          )
-        end
-      end
-    end
-  end
-
-  k8s.redisdbs(namespace: nil).each do |redis|
-    apply k8s, redis
+    #       LOG.warn { "Patching RedisDB #{namespace}/#{new_master_name} to become the master instance..." }
+    #       k8s.patch_redisdb(
+    #         namespace: namespace,
+    #         name: new_master_name,
+    #         metadata: {
+    #           annotations: {"redis-replicaof": "NO ONE"},
+    #           labels:      {"redis-cluster-role": "master"},
+    #         }
+    #       )
+    #     end
+    #   end
+    # end
   end
 rescue ex
   error ex
@@ -110,21 +107,6 @@ end
 def apply(k8s, cluster : Kubernetes::Resource(RedisCluster))
   instance = cluster.metadata.name
   replicas = cluster.spec.replicas
-  master = cluster.status.as_h?.try(&.["master"]?.try(&.as_i?))
-
-  # If the cluster master node is not set or is set to one that is about to be removed
-  if master.nil? || master > (replicas + 1)
-    master = 1
-
-    LOG.info { "Setting master on #{cluster.metadata.namespace}/#{cluster.metadata.name}..." }
-    k8s.patch_rediscluster(
-      name: cluster.metadata.name,
-      namespace: cluster.metadata.namespace,
-      status: {
-        master: master,
-      },
-    )
-  end
 
   k8s.apply_service(
     metadata: {
@@ -152,53 +134,12 @@ def apply(k8s, cluster : Kubernetes::Resource(RedisCluster))
       ports: { {port: 6379} },
     },
   )
-
-  replicas.times do |i|
-    index = i + 1
-    k8s.apply_redisdb(
-      metadata: {
-        name:      "#{cluster.metadata.name}-#{index}",
-        namespace: cluster.metadata.namespace,
-        labels:    {
-          "app.kubernetes.io/name":       "redisdb",
-          "app.kubernetes.io/instance":   "redisdb-#{cluster.metadata.name}-#{index}",
-          "app.kubernetes.io/part-of":    "redis-cluster",
-          "app.kubernetes.io/managed-by": "redis-cluster-operator",
-          "app.kubernetes.io/created-by": "redis-cluster-operator",
-          "redis-cluster":                instance,
-          "redis-cluster-role":           index == master ? "master" : "replica",
-        },
-        annotations: {
-          "redis-replicaof": if index == master
-            "NO ONE"
-          else
-            "#{cluster.metadata.name}-master"
-          end,
-        },
-      },
-      spec: {
-        size: cluster.spec.size,
-      },
-    )
-  end
-
-  k8s.redisdbs(namespace: cluster.metadata.namespace, label_selector: "redis-cluster=#{instance}").each do |redisdb|
-    if (match = redisdb.metadata.name.match(/-(\d+)$/)) && (index = match[1]?)
-      index = index.to_i
-      if index > cluster.spec.replicas
-        k8s.delete_redisdb(
-          namespace: cluster.metadata.namespace,
-          name: "#{cluster.metadata.name}-#{index}",
-        )
-      end
-    end
-  end
 end
 
 def apply(k8s, resource : Kubernetes::Resource(RedisDB))
   metadata = resource.metadata
   redis = resource.spec
-  instance = metadata.labels["redis-cluster"]
+  return unless instance = metadata.labels["redis-cluster"]?
   role = metadata.labels["redis-cluster-role"]
 
   if role == "replica"
@@ -240,6 +181,81 @@ def apply(k8s, resource : Kubernetes::Resource(RedisDB))
       ],
     },
   )
+end
+
+def reconcile_step(k8s, cluster : Kubernetes::Resource(RedisCluster))
+  instance = cluster.metadata.name
+  replicas = cluster.spec.replicas
+
+  dbs = k8s.redisdbs(namespace: cluster.metadata.namespace, label_selector: "redis-cluster=#{instance}")
+
+  if dbs.size < replicas
+    index = dbs.size
+
+    k8s.apply_redisdb(
+      metadata: {
+        name:      "#{cluster.metadata.name}-#{index}",
+        namespace: cluster.metadata.namespace,
+        labels:    {
+          "app.kubernetes.io/name":       "redisdb",
+          "app.kubernetes.io/instance":   "redisdb-#{cluster.metadata.name}-#{index}",
+          "app.kubernetes.io/part-of":    "redis-cluster",
+          "app.kubernetes.io/managed-by": "redis-cluster-operator",
+          "app.kubernetes.io/created-by": "redis-cluster-operator",
+          "redis-cluster":                instance,
+          "redis-cluster-role":           "replica",
+        },
+        annotations: {
+          "redis-replicaof": "#{cluster.metadata.name}-master",
+        },
+      },
+      spec: {
+        size: cluster.spec.size,
+      },
+    )
+  elsif dbs.size > replicas
+    k8s.redisdbs(namespace: cluster.metadata.namespace, label_selector: "redis-cluster=#{instance}").each do |redisdb|
+      if (match = redisdb.metadata.name.match(/-(\d+)$/)) && (index = match[1]?)
+        index = index.to_i
+        if index > cluster.spec.replicas
+          k8s.delete_redisdb(
+            namespace: cluster.metadata.namespace,
+            name: "#{cluster.metadata.name}-#{index}",
+          )
+        end
+      end
+    end
+  end
+
+  # replicas.times do |i|
+  #   index = i + 1
+  #   k8s.apply_redisdb(
+  #     metadata: {
+  #       name:      "#{cluster.metadata.name}-#{index}",
+  #       namespace: cluster.metadata.namespace,
+  #       labels:    {
+  #         "app.kubernetes.io/name":       "redisdb",
+  #         "app.kubernetes.io/instance":   "redisdb-#{cluster.metadata.name}-#{index}",
+  #         "app.kubernetes.io/part-of":    "redis-cluster",
+  #         "app.kubernetes.io/managed-by": "redis-cluster-operator",
+  #         "app.kubernetes.io/created-by": "redis-cluster-operator",
+  #         "redis-cluster":                instance,
+  #         "redis-cluster-role":           index == master ? "master" : "replica",
+  #       },
+  #       annotations: {
+  #         "redis-replicaof": if index == master
+  #           "NO ONE"
+  #         else
+  #           "#{cluster.metadata.name}-master"
+  #         end,
+  #       },
+  #     },
+  #     spec: {
+  #       size: cluster.spec.size,
+  #     },
+  #   )
+  # end
+
 end
 
 def error(ex : Exception)
