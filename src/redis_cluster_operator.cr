@@ -101,7 +101,7 @@ loop do
   end
 
   k8s.redisdbs(namespace: nil).each do |redis|
-    # apply k8s, redis
+    apply k8s, redis
   end
 rescue ex
   error ex
