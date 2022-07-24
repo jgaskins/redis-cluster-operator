@@ -77,8 +77,8 @@ loop do
           if new_master_pod = k8s.pod(namespace: namespace, name: new_master_name)
             uri = URI.parse("redis://#{new_master_pod.status["podIP"]}/")
             LOG.warn { "Connecting to #{namespace}/#{new_master_pod.metadata.name} (#{uri})..." }
-            pp r = Redis::Client.new(uri)
-            LOG.warn { r.run(%w[replicaof no one]).to_s }
+            r = Redis::Client.new(uri)
+            LOG.warn { r.run(%w[replicaof no one]).inspect }
             r.close
             LOG.warn { "RedisDB #{namespace}/#{new_master_name} server has taken over as cluster master" }
           end
