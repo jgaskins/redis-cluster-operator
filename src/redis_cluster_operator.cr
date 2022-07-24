@@ -227,7 +227,14 @@ def apply(k8s, resource : Kubernetes::Resource(RedisDB))
               value: redis_args,
             },
           },
-          ports: { {containerPort: 6379} },
+          ports:         { {containerPort: 6379} },
+          livenessProbe: {
+            exec: {
+              command:             %w[redis-cli get foo],
+              initialDelaySeconds: 5,
+              periodSeconds:       3,
+            },
+          },
         },
       ],
     },
