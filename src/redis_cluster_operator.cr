@@ -260,6 +260,7 @@ def promote_to_master(k8s, db : Kubernetes::Resource(RedisDB))
           },
         },
       )
+      apply k8s, db
     ensure
       r.close
     end
