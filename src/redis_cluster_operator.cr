@@ -227,40 +227,43 @@ def reconcile_step(k8s, cluster : Kubernetes::Resource(RedisCluster))
     end
   end
 
-  # replicas.times do |i|
-  #   index = i + 1
-  #   k8s.apply_redisdb(
-  #     metadata: {
-  #       name:      "#{cluster.metadata.name}-#{index}",
-  #       namespace: cluster.metadata.namespace,
-  #       labels:    {
-  #         "app.kubernetes.io/name":       "redisdb",
-  #         "app.kubernetes.io/instance":   "redisdb-#{cluster.metadata.name}-#{index}",
-  #         "app.kubernetes.io/part-of":    "redis-cluster",
-  #         "app.kubernetes.io/managed-by": "redis-cluster-operator",
-  #         "app.kubernetes.io/created-by": "redis-cluster-operator",
-  #         "redis-cluster":                instance,
-  #         "redis-cluster-role":           index == master ? "master" : "replica",
-  #       },
-  #       annotations: {
-  #         "redis-replicaof": if index == master
-  #           "NO ONE"
-  #         else
-  #           "#{cluster.metadata.name}-master"
-  #         end,
-  #       },
-  #     },
-  #     spec: {
-  #       size: cluster.spec.size,
-  #     },
-  #   )
-  # end
-
+  if dbs.none? { |db| db.metadata.labels["redis-cluster-role"]? == "master" }
+    # FIXME: Find the one that has the best replication status if possible
+    new_master = dbs.sample
+    promote_to_master k8s, new_master
+  end
 end
 
 def error(ex : Exception)
   LOG.error { ex }
   if trace = ex.backtrace?
     trace.each { |line| LOG.error { line } }
+  end
+end
+
+def promote_to_master(k8s, db : Kubernetes::Resource(RedisDB))
+  namespace = db.metadata.namespace
+  name = db.metadata.name
+  LOG.info { "Promoting RedisDB #{namespace}/#{name} to cluster master" }
+
+  if (pod = k8s.pod(namespace: namespace, name: name)) && (ip = pod.status["podIP"]?)
+    r = Redis::Client.new(URI.parse("redis://#{ip}"))
+    begin
+      r.run %w[replicaof no one]
+
+      k8s.patch_redisdb(
+        namespace: namespace,
+        name: name,
+        metadata: {
+          labels: {
+            "redis-cluster-role": "master",
+          },
+        },
+      )
+    ensure
+      r.close
+    end
+  else
+    LOG.warn { "No pod for RedisDB #{namespace}/#{name}, cannot promote" }
   end
 end
