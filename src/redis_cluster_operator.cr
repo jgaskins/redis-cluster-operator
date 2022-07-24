@@ -1,7 +1,10 @@
 require "kubernetes"
 require "redis"
+require "log"
 
-LOG = Log.for("redis-cluster-operator", level: :debug)
+Log.setup_from_env
+
+LOG = Log.for("redis-cluster-operator")
 
 Kubernetes.import_crd "k8s/crd-redis-cluster.yaml"
 Kubernetes.import_crd "k8s/crd-redis-db.yaml"
